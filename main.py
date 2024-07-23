@@ -1,13 +1,22 @@
-import gpxpy
+import branca
+import geopy.distance
 import gpxpy.gpx
 import folium
-from geopy.distance import great_circle
 import os
-from itertools import combinations
-from sklearn.cluster import DBSCAN
+import math
 
 def is_close(pt1, pt2, tolerance=1):
-    return great_circle(pt1, pt2).meters <= tolerance
+    R = 6371000
+    lat1_rad = math.radians(pt1[0])
+    lon1_rad = math.radians(pt1[1])
+    lat2_rad = math.radians(pt2[0])
+    lon2_rad = math.radians(pt2[1])
+    dlat = lat2_rad - lat1_rad
+    dlon = lon2_rad - lon1_rad
+    a = math.sin(dlat / 2) ** 2 + math.cos(lat1_rad) * math.cos(lat2_rad) * math.sin(dlon / 2) ** 2
+    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+    distance = R * c
+    return distance <= tolerance
 
 
 points = []
@@ -17,31 +26,72 @@ for i, file in enumerate(os.listdir("GPX")):
         gpx = gpxpy.parse(gpxFile)
         points.append([[point.latitude, point.longitude] for track in gpx.tracks for segment in track.segments for point in segment.points])
 
-def findClosePt(pt, pts, tolerance=2):
-    for ept in pts:
-        if is_close(pt, ept, tolerance):
-            return ept
+def calculate_centroid(cluster):
+    latitudes = [p[0] for p in cluster['points']]
+    longitudes = [p[1] for p in cluster['points']]
+    return (sum(latitudes) / len(latitudes), sum(longitudes) / len(longitudes))
+
+
+def find_cluster(pt, clusters, tolerance=2):
+    for cluster in clusters:
+        if any(is_close(pt, p, tolerance) for p in cluster['points']):
+            return cluster
     return None
 
-ptCnts = {}
+clusters = []
 decimals = 5
 for run in points:
     for pt in run:
         rpt = round(pt[0], decimals), round(pt[1], decimals)
-        closePt = findClosePt(rpt, ptCnts.keys(), tolerance=2)
-        if closePt:
-            ptCnts[closePt] += 1
+        cluster = find_cluster(rpt, clusters, tolerance=5)
+        if cluster:
+            cluster['points'].append(rpt)
+            cluster['size'] += 1
         else:
-            ptCnts[rpt] = 1
+            clusters.append({'points': [rpt], 'size': 1})
+
+def get_color(size, min_size, max_size):
+    color_scale = branca.colormap.linear.YlOrRd_09.scale(min_size, max_size)
+    return color_scale(size)
+
+def find_nearest_centroid(centroid, other_centroids):
+    min_distance = float('inf')
+    nearest_centroid = None
+    for other in other_centroids:
+        distance = geopy.distance.distance(centroid, other).m
+        if distance < min_distance:
+            min_distance = distance
+            nearest_centroid = other
+    return nearest_centroid
 
 
-overlaps = [pt for pt, count in ptCnts.items() if count > 1]
-if overlaps:
-    m = folium.Map(location=(overlaps[0][0], overlaps[0][1]), zoom_start=13)
-    for pt, count in ptCnts.items():
-        if count > 1:
-            folium.CircleMarker(location=pt, radius=3, color='red', fill=True, fill_color='red', fill_opacity=0.6, popup=f"Count: {count}").add_to(m)
-    m.save("index.html")
-else:
-    print("No overlapping points found")
-m.save("index.html")
+centroids = [calculate_centroid(cluster) for cluster in clusters]
+sizes = [cluster['size'] for cluster in clusters]
+min_size, max_size = min(sizes), max(sizes)
+
+m = folium.Map(location=(centroids[0][0], centroids[0][1]), zoom_start=13)
+
+centroid_map = {}
+for cluster in clusters:
+    centroid = calculate_centroid(cluster)
+    centroid_map[tuple(centroid)] = cluster['size']
+
+all_centroids = list(centroid_map.keys())
+
+connected = set()
+for centroid in all_centroids:
+    nearest_centroid = find_nearest_centroid(centroid, [c for c in all_centroids if c != centroid])
+    if nearest_centroid and (nearest_centroid, centroid) not in connected and (centroid, nearest_centroid) not in connected:
+        size1 = centroid_map[centroid]
+        size2 = centroid_map[nearest_centroid]
+        max_size = max(size1, size2)
+        folium.PolyLine(
+            locations=[centroid, nearest_centroid],
+            color=get_color(max_size, min_size, max_size),
+            weight=5,
+            opacity=0.6
+        ).add_to(m)
+        connected.add((centroid, nearest_centroid))
+
+
+m.save('index.html')
