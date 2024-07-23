@@ -3,6 +3,8 @@ import gpxpy.gpx
 import folium
 from geopy.distance import great_circle
 import os
+from itertools import combinations
+from sklearn.cluster import DBSCAN
 
 def is_close(pt1, pt2, tolerance=1):
     return great_circle(pt1, pt2).meters <= tolerance
@@ -15,62 +17,31 @@ for i, file in enumerate(os.listdir("GPX")):
         gpx = gpxpy.parse(gpxFile)
         points.append([[point.latitude, point.longitude] for track in gpx.tracks for segment in track.segments for point in segment.points])
 
+def findClosePt(pt, pts, tolerance=2):
+    for ept in pts:
+        if is_close(pt, ept, tolerance):
+            return ept
+    return None
 
-def contiguousOverlaps(points, tolerance=50):
-    print("Contiguous Overlaps")
-    cont_segs = []
-    overIs = segmentIndex(points, tolerance)
-    if not overIs:
-        return cont_segs
-
-    curr_seg = [points[overIs[0]]]
-    for i in range(1, len(overIs)):
-        if overIs[i] == overIs[i - 1] + 1:
-            curr_seg.append(points[overIs[i]])
-        else:
-            cont_segs.append(curr_seg)
-            curr_seg = [points[overIs[i]]]
-    cont_segs.append(curr_seg)
-
-    return cont_segs
-
-
-def segmentIndex(points, tolerance=1):
-    indices = []
-    for i, pt in enumerate(points):
-        if i == 0:
-            continue
-        if is_close(pt, points[i-1], tolerance):
-            indices.append(i)
-    return indices
-
-tolerance = 1
-flat_points = [point for sublist in points for point in sublist]
-all_overlaps = []
+ptCnts = {}
+decimals = 5
 for run in points:
-    overlaps = []
-    for i, pt in enumerate(points[0]):
-        overlaps = []
-        for other_run in points:
-            if run == other_run:
-                continue
-            for pt in run:
-                if any(is_close(pt, other_pt, tolerance) for other_pt in other_run):
-                    overlaps.append(pt)
-
-        cps = contiguousOverlaps(overlaps, tolerance)
-        all_overlaps.append(cps)
-
-overlapCnts = {}
-for contiguous_parts in all_overlaps:
-    for part in contiguous_parts:
-        partT = tuple(part)
-        if partT in overlapCnts:
-            overlapCnts[partT] += 1
+    for pt in run:
+        rpt = round(pt[0], decimals), round(pt[1], decimals)
+        closePt = findClosePt(rpt, ptCnts.keys(), tolerance=2)
+        if closePt:
+            ptCnts[closePt] += 1
         else:
-            overlapCnts[partT] = 1
+            ptCnts[rpt] = 1
 
-sorted_overlaps = sorted(overlapCnts.items(), key=lambda x: x[1], reverse=True)
 
-for segment, count in sorted_overlaps:
-    print(f"Segment: {segment}, Count: {count}")
+overlaps = [pt for pt, count in ptCnts.items() if count > 1]
+if overlaps:
+    m = folium.Map(location=(overlaps[0][0], overlaps[0][1]), zoom_start=13)
+    for pt, count in ptCnts.items():
+        if count > 1:
+            folium.CircleMarker(location=pt, radius=3, color='red', fill=True, fill_color='red', fill_opacity=0.6, popup=f"Count: {count}").add_to(m)
+    m.save("index.html")
+else:
+    print("No overlapping points found")
+m.save("index.html")
