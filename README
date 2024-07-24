@@ -1,0 +1,4 @@
+Holy moly I did not like making this.
+Got out of hand really fast ended up sort of fumbling around in the dark, but got a working program in the end.
+Put all your GPX files that you export from Strava in a GPX folder, and then find the outputted index.html, copy the path, and put that into your browser.
+The result is that red is where you run the most and black is where you don't.
